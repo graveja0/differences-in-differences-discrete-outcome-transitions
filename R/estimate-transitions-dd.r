@@ -1,8 +1,8 @@
-outcome <- quo(insurance_type)
-post = quo(post)
-z = quo(expansion_state)
-id = quo(idnumber)
-ref_cat = "UNIN"
+# outcome <- quo(insurance_type)
+# post = quo(post)
+# z = quo(expansion_state)
+# id = quo(idnumber)
+# ref_cat = "UNIN"
 
 estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
 

@@ -1,6 +1,6 @@
 ---
-title: "Replication Code"
-author: "John Graves"
+title: "Difference-in-differences for discrete outcome transitions, with application to insurance transitions following the Affordable Care Act’s Medicaid expansion"
+subtitle: "Replication Code"
 date: "1/29/2021"
 output: html_document
 editor_options: 
@@ -19,22 +19,13 @@ source(here::here("R/shared-objects.R"))
 ### PROJECT PARAMETERS
 #-----------------------
 months_to_model <- c(1,36)    # The two time periods to model for the main results (e.g., month 1 vs. month 36)
-
-
-### USE ONLY IF NEEDED
-# source(here::here("R/prepare-multistate-data.R"))
-# source(here::here("R/fit-multistate-model.R"))
-# source(here::here("R/get-cumulative-hazard.R"))
-# source(here::here("R/add-binary-indicators.R"))
-# source(here::here("R/transitions-dd-model.R"))
-# source(here::here("R/ri-permute.R"))
 ```
 
 # Prepare Raw SIPP Data
 
 ```{r read-and-tidy-sipp-data}
 # Create the SIPP data extract from RAW
-create_sipp_data = FALSE
+create_sipp_data = TRUE
 if (create_sipp_data) source(here("R/read-and-tidy-SIPP-data.R"))
 
 # Load the SIPP data.
@@ -185,48 +176,49 @@ df_w %>%
 # Sourced file has function to estimate standard marginal DD and transitions model 
 # based on specification in manuscript. 
 source(here("R/estimate-transitions-dd.r"))
-dd_lm <- 
-  df %>% 
-  estimate_DD(
-    outcome = insurance_type, 
-    post = post, 
-    z = expansion_state,
-    id = idnumber,
-    ref_cat = "UNIN"
-  ) 
-
-```
-
-## Randomization Inference-Based Estimates
-
-```{r}
 source(here("R/ri-permute.r"))
-dd_lm_ri <- 
-  df %>%
-    ri_permute(m = 1000, 
-               treatment = expansion_state, 
-               cluster = state, 
-               idvar = idnumber,
-               outcome = insurance_type) %>% 
-    do({
-      estimate_DD(
-                  df = ., 
-                  outcome = insurance_type, 
-                  post = post, 
-                  z = expansion_state,
-                  id = idnumber,
-                  ref_cat = "UNIN")
-    }) 
 
-results <- 
-  list(
-    dd_lm = dd_lm, 
-    dd_lm_ri = dd_lm_ri
-  ) 
+run_dd = FALSE
 
-results %>% 
-  write_rds(here("output/primary-estimates.rds"))
+if (run_dd) {
 
+  dd_lm <- 
+    df %>% 
+    estimate_DD(
+      outcome = insurance_type, 
+      post = post, 
+      z = expansion_state,
+      id = idnumber,
+      ref_cat = "UNIN"
+    ) 
+  
+  dd_lm_ri <- 
+    df %>%
+      ri_permute(m = 1000, 
+                 treatment = expansion_state, 
+                 cluster = state, 
+                 idvar = idnumber,
+                 outcome = insurance_type) %>% 
+      do({
+        estimate_DD(
+                    df = ., 
+                    outcome = insurance_type, 
+                    post = post, 
+                    z = expansion_state,
+                    id = idnumber,
+                    ref_cat = "UNIN")
+      }) 
+  
+  results <- 
+    list(
+      dd_lm = dd_lm, 
+      dd_lm_ri = dd_lm_ri
+    ) 
+  
+  results %>% 
+    write_rds(here("output/primary-estimates.rds"))
+    
+}
 
 ```
 
