@@ -1,0 +1,20 @@
+---
+title: "Difference-in-differences for Discrete Outcome Transitions"
+output: github_document
+---
+
+<style>
+p.comment {
+background-color: #DBDBDB;
+padding: 10px;
+border: 1px solid black;
+margin-left: 25px;
+border-radius: 5px;
+font-style: italic;
+}
+</style>
+
+This readme serves as the primary analytics hub for the DD transitions paper.  
+
+This report was compiled on `r lubridate::today()` using `r devtools::session_info()[["platform"]]$version`. 
+
