@@ -1,0 +1,288 @@
+---
+title: "Replication Code"
+author: "John Graves"
+date: "1/29/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+
+```{r setup}
+library(here)
+source(here::here("R/manifest.r"))
+source(here::here("R/shared-objects.R"))
+# piggyback::pb_new_release("graveja0/differences-in-differences-discrete-outcome-transitions", "v0.0.1")
+
+#-----------------------
+### PROJECT PARAMETERS
+#-----------------------
+months_to_model <- c(1,36)    # The two time periods to model for the main results (e.g., month 1 vs. month 36)
+
+
+### USE ONLY IF NEEDED
+# source(here::here("R/prepare-multistate-data.R"))
+# source(here::here("R/fit-multistate-model.R"))
+# source(here::here("R/get-cumulative-hazard.R"))
+# source(here::here("R/add-binary-indicators.R"))
+# source(here::here("R/transitions-dd-model.R"))
+# source(here::here("R/ri-permute.R"))
+```
+
+# Prepare Raw SIPP Data
+
+```{r read-and-tidy-sipp-data}
+# Create the SIPP data extract from RAW
+create_sipp_data = FALSE
+if (create_sipp_data) source(here("R/read-and-tidy-SIPP-data.R"))
+
+# Load the SIPP data.
+df_sipp_full <- read_rds(here("input/sipp/01_sipp-tidy_v1-0.rds"))
+```
+
+## Survey Weights
+
+Given that we use panel survey data covering several years, some individuals are observed to move across states over the study period. As such, we classify their state in terms of where they were at baseline.
+
+In addition, we attach survey weights to each study unit observation based on their SIPP survey weight in the baseline month.
+
+```{r}
+
+# Get the weight (first month weight)
+df_w <- 
+  df_sipp_full %>% 
+  mutate(idnumber = id) %>% 
+  group_by(idnumber) %>% 
+  mutate(year = ifelse(swave ==1 , 2013, ifelse(swave==2,2014,2015))) %>% 
+  mutate(month = ifelse(swave ==1 , monthcode, ifelse(swave==2,monthcode+12,monthcode+24))) %>% 
+  filter(month==1) %>% 
+  # Note these state expansion size definitions (substantial, full, etc.) are mapped to 
+  # states in R/shared-objects.r, and are based on Black et al. 
+  # (Appendix to NBER working paper https://www.nber.org/system/files/working_papers/w25568/w25568.pdf)
+  mutate(expansion_state = 
+        as.integer((lubridate::year(expansion_date)==2014|
+                      lubridate::year(expansion_date)==2015|
+                         lubridate::year(expansion_date)==2016) &
+                        (substantial_expansion_state == 1 | full_expansion_state == 1 |
+                           mild_expansion_state==1))) %>% 
+  mutate(expansion_state = ifelse(is.na(expansion_state),0,expansion_state)) %>% 
+  mutate(exclude_state = as.integer(expansion_date < "2014-01-01")) %>% 
+  # Expansion state varies in the underling data due to moves. Just keeping state at 
+  # baseline. 
+  select(idnumber,contains("state"), expansion_date,sex, race, 
+         weight = wpfinwgt, inc_pov) %>% 
+  ungroup() 
+```
+
+# Define Analytic Sample
+
+```{r define analytic sample}
+
+df_sipp <- 
+  df_sipp_full %>%   
+  # Expansion state varies in the underling data due to moves. Just keeping state at 
+  # baseline, as noted above. 
+  select(-contains("state")) %>% 
+  filter(age <= 63 & age >= 18) %>% 
+  mutate(year = ifelse(swave ==1 , 2013, ifelse(swave==2,2014,2015))) %>% 
+  mutate(month = ifelse(swave ==1 , monthcode, ifelse(swave==2,monthcode+12,monthcode+24))) %>% 
+  mutate(idnumber = id) %>% 
+  # Pool ESI-Own and ESI-Dependent
+  mutate(insurance_type = ifelse(rhimth==2 & medcaidmth==0 & medcarmth==0 & ephi_t==0 & milmth==0 & privhimth==0,"UNIN",
+                                 ifelse(medcaidmth==1 | medcarmth==1,"PUB",
+                                        ifelse((ephi_t==1 | milmth==1) & own_cov==1,"ESI",
+                                               ifelse((ephi_t==1 | milmth==1) & own_cov==0,"ESI", # These are now pooled with ESI-own
+                                                      ifelse(privhimth==1,"PRIV",NA)))))) %>% 
+  select(idnumber,month,insurance_type)  %>% 
+  group_by(idnumber) %>% 
+  ungroup()  %>% 
+  left_join(df_w,"idnumber") %>% 
+  filter(exclude_state != 1 | is.na(exclude_state)) %>% 
+  mutate(weight = 1) %>% 
+  mutate(state = as.character(paste0(state))) %>% 
+  group_by(idnumber) %>% 
+  mutate(months_in_sample = n())
+
+################################################################################
+# Define estimation sample (Two-Period Balanced Panel Case)
+################################################################################
+df <-                                     # Data frame for estimation
+  df_sipp %>%
+  filter(month %in% months_to_model) %>% 
+  select(idnumber, state,insurance_type, month,weight, expansion_state) %>% 
+  mutate(post = as.integer(month>12)) %>% 
+  group_by(idnumber) %>% 
+  mutate(total_observations = n()) %>% 
+  ungroup() %>% 
+  filter(total_observations ==2)
+################################################################################
+
+```
+
+### State Sample Table
+
+```{r state sample size table}
+
+df_w %>% 
+  ungroup() %>% 
+  filter(idnumber %in% df$idnumber) %>% 
+  select(state,exclude_state,expansion_date,expansion_state) %>% 
+  arrange(state) %>% 
+  group_by(state,exclude_state,expansion_date,expansion_state) %>% 
+  mutate(insamp = 1 ) %>% 
+  summarise(insamp = sum(insamp)) %>% 
+  ungroup() %>% 
+  filter(exclude_state != 1 | is.na(exclude_state)) %>% 
+  mutate(expansion_state = factor(expansion_state,
+                                  labels = c("Non-Expansion","Expansion"))) %>% 
+  #####
+  ####  GTABLE 
+  #####
+  gt::gt(rowname_col="state") %>% 
+  fmt_missing(columns= 1:5,missing_text = "") %>% 
+  tab_footnote(footnote = 
+               "Included in nonexpansion states because expansion date 
+               occurred after last month in analytic SIPP sample.",
+               locations = cells_body(
+               rows=expansion_date>"2016-12-31",
+               columns=vars(expansion_date))) %>% 
+  tab_row_group(
+    group = "Nonexpansion States (2014-2016)",
+    rows = expansion_state=="Non-Expansion"
+  )  %>%
+    tab_row_group(
+    group = "Expansion States (2014-2016)",
+    rows = expansion_state=="Expansion"
+  ) %>%
+
+  cols_hide(vars(exclude_state,expansion_state)) %>% 
+  cols_label(state = "State",
+             expansion_date = "Expansion Date",
+             insamp = "Sample Size") %>% 
+  summary_rows(formatter = fmt_number,
+    decimals = 0,
+    groups = TRUE,
+    columns = vars(insamp),
+    fns = list("Sample Size" = "sum"),
+    
+  ) %>% 
+  fmt_number(vars(insamp),decimals = 0,sep_mark = ",") %>% 
+  gt::tab_footnote(footnote =
+    "The following states are excluded from the sample because they already had generous
+    Medicaid coverage up to 138% FPL: CA, CT, DC, DE, HI, MA, MN, NY, VT, WI.",
+    locations = cells_group(groups="Expansion States (2014-2016)")) %>% 
+  gtsave(here("tables-and-figures/01_state-sample-size-table.pdf"),vwidth=300,vheight=1000)
+```
+
+# Primary Analysis
+
+## Main Estimates
+
+-   To do: add covariates to function if needed.
+
+```{r}
+# Sourced file has function to estimate standard marginal DD and transitions model 
+# based on specification in manuscript. 
+source(here("R/estimate-transitions-dd.r"))
+dd_lm <- 
+  df %>% 
+  estimate_DD(
+    outcome = insurance_type, 
+    post = post, 
+    z = expansion_state,
+    id = idnumber,
+    ref_cat = "UNIN"
+  ) 
+
+```
+
+## Randomization Inference-Based Estimates
+
+```{r}
+source(here("R/ri-permute.r"))
+dd_lm_ri <- 
+  df %>%
+    ri_permute(m = 1000, 
+               treatment = expansion_state, 
+               cluster = state, 
+               idvar = idnumber,
+               outcome = insurance_type) %>% 
+    do({
+      estimate_DD(
+                  df = ., 
+                  outcome = insurance_type, 
+                  post = post, 
+                  z = expansion_state,
+                  id = idnumber,
+                  ref_cat = "UNIN")
+    }) 
+
+results <- 
+  list(
+    dd_lm = dd_lm, 
+    dd_lm_ri = dd_lm_ri
+  ) 
+
+results %>% 
+  write_rds(here("output/primary-estimates.rds"))
+
+
+```
+
+## Falsification Test
+
+```{r falsification analysis}
+
+# Falsification is done nonparametrically, but in principle we could do the 
+# regression-based version. 
+
+est_falsification <- 
+  2:36 %>% 
+  map(~({
+    df_sipp %>% 
+    ungroup() %>% 
+    filter(in_twoper_sample==1) %>% 
+    count(month,insurance_type,expansion_state,wt = weight) %>% 
+    group_by(month,expansion_state) %>% 
+    mutate(pct = n/sum(n)) %>% 
+    filter(month %in% c(1,.x)) %>% 
+    select(-n) %>% 
+    spread(month,pct) %>% 
+    set_colnames(c("insurance_type","expansion_state","pre","post")) %>% 
+    filter(!is.na(expansion_state)) %>% 
+    mutate(change = post - pre) %>% 
+    select(insurance_type,expansion_state,change) %>% 
+    ungroup() %>% 
+    mutate(expansion_state = 
+             factor(expansion_state,labels = c("nonexpansion","expansion"))) %>% 
+    spread(expansion_state,change) %>% 
+    mutate(dd = expansion-nonexpansion)
+  })) %>% 
+  bind_rows(.id = "comparison") %>% 
+  mutate(foo = as.numeric(paste0(comparison))+1) 
+
+p_falsification <- 
+  est_falsification %>% 
+  mutate(insurance2 = insurance_lut[insurance_type]) %>% 
+  ggplot(aes(x = foo , y = dd * 100)) +
+  geom_line(aes(colour = insurance2)) +
+  ylab("Percentage point change relative to January 2013") + 
+  xlab("Months Since January 2013") + 
+  geom_vline(aes(xintercept = 13),lty=2) + 
+  xlim(c(0,36)) + 
+  annotate("text",x = 13.5,y = 4,
+           label = "Primary Medicaid\nExpansion Date",
+           hjust =0,cex = 3, family  = "Gill Sans") + 
+  geom_hline(aes(yintercept = 0)) + 
+  theme_tufte_revised() +
+  geom_hline(yintercept = seq(-6,6,2),colour = "lightgrey",lty=3) + 
+  scale_y_continuous(breaks = -6:6, labels = paste0(format(round(-6:6),nsmall=1))) +
+  scale_x_continuous(breaks = seq(0,36,2),limits  = c(0,42))
+
+p_falsification_final <- 
+  directlabels::direct.label(p_falsification,method=list("last.bumpup",fontfamily = "Gill Sans",cex = .8))  
+p_falsification_final + scale_colour_Publication() 
+ggsave("tables-and-figures/dd-falsification.tiff",width = 8, height = 4)
+
+```

@@ -1,0 +1,27 @@
+options("scipen"=100, "digits"=6)
+library(usethis)
+library(tidyverse)
+library(conflicted)
+library(rlang)
+library(gt)
+library(piggyback)
+library(magrittr)
+library(directlabels)
+conflict_prefer("filter", "dplyr")
+conflict_prefer("set_names", "rlang")
+conflict_prefer("lag", "dplyr")
+
+
+
+
+# library(kableExtra)
+# library(knitr)
+# library(pander)
+# library(magrittr)
+# library(doParallel)
+# library(mstate)
+# library(flexsurv)
+# library(eha)
+# library(heemod)
+# library(here)
+# library(cluster)
