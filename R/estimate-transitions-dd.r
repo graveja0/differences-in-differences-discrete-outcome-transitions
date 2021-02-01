@@ -1,10 +1,11 @@
-# outcome <- quo(insurance_type)
-# post = quo(post)
-# z = quo(expansion_state)
-# id = quo(idnumber)
-# ref_cat = "UNIN"
+outcome <- quo(insurance_type)
+post = quo(post)
+z = quo(expansion_state)
+id = quo(idnumber)
+ref_cat = "UNIN"
+weight = quo(weight)
 
-estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
+estimate_DD <- function(df, id, outcome, post , z , weight ,ref_cat, nonparamteric = FALSE ) {
 
    outcome <- enquo(outcome)
    post <- enquo(post)
@@ -34,11 +35,15 @@ estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
         select({{id}},{{outcome}}) %>% 
         rename(pre = {{outcome}}) %>% 
         mutate(pre = factor(pre)), quo_name(id)
-    )
+    ) 
 
   # Outcome matrix (binary indicators for each coverage category)
   Y <- 
     xx_orig[,category_names] %>% 
+    as.matrix()
+  
+  W <- 
+    xx_orig[,quo_name(weight)] %>% 
     as.matrix()
   
   # Define J-1 outcomes and structure the data with pre-period indicators
@@ -48,6 +53,11 @@ estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
     select_at(all_of(category_names[-grep(ref_cat,category_names)]))  %>% 
     as.matrix()
 
+  W_ <- 
+    xx %>% 
+    filter({{post}} == 0) %>% 
+    select_at(vars(weight,quo_name(id))) 
+  
   y_pre <- 
     xx %>% 
     filter({{post}} == 0) %>% 
@@ -65,20 +75,49 @@ estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
   xx_ <- 
     y_pre %>% 
     inner_join(y_pre_z,quo_name(id))  %>% 
+    inner_join(W_,quo_name(id)) %>% 
     select(-quo_name(id))
+  
+  xx_noweight_ <- 
+    xx_ %>% select(-weight)
+  
+  foo <- 
+    cbind(xx_$weight, xx_$weight, xx_$weight)
   
   ###----------------
   ### FIT MODELS
   ###----------------
+  
+  # nonparametric
+  m_nonparametric <- 
+    xx_orig %>% 
+    #mutate(weight = 1) %>% 
+    count({{outcome}},{{post}},{{z}},wt = weight) %>% 
+    group_by({{z}},{{post}}) %>% 
+    mutate(pct = n/sum(n)) %>% 
+    select(-n) %>% 
+    spread(post,pct) %>% 
+    set_colnames(c(quo_name(outcome),quo_name(z),"pre","post")) %>% 
+    mutate(change = post - pre) %>% 
+    select({{outcome}},{{z}},change) %>% 
+    ungroup() %>% 
+    spread({{z}},change) %>% 
+    set_colnames(c(quo_name(outcome),"nontreated","treated")) %>% 
+    mutate(nonparametric = treated - nontreated) %>% 
+    select({{outcome}},nonparametric) %>% 
+    column_to_rownames(var = quo_name(outcome)) %>% 
+    t()
+  
   m_marginal <- 
-    lm(Y ~ xx$z + xx$post + xx$post_z)
+    lm(Y ~ xx$z + xx$post + xx$post_z, weight = W)
   
   # m1 <-
   #   lm(Y~xx$z + xx$post + xx$post_z + xx$z*xx$pre + xx$post*xx$pre + xx$post_z*xx$pre)
 
   m_transitions <-
-    lm(Y_ ~ . -1, data = xx_)
+    lm(Y_ ~ . -1, data = xx_noweight_, weight = xx_$weight)
   
+
   ###------------------
   ### PREDICTED VALUES
   ###------------------
@@ -190,7 +229,8 @@ estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
     set_names(category_names)
   
   ### CONSTRUCT ESTIMANDS
-  (att_marginal <-  coef(m_marginal)["xx$post_z",])
+  (att_nonparametric = m_nonparametric[,category_names])
+  (att_marginal <-  coef(m_marginal)["xx$post_z",][category_names])
   #(att_A_m1 <- (hat_p_1_m1 %*% hat_R_1_m1 - hat_p_1_m1) - (hat_p_0_m1 %*% hat_R_0_m1 - hat_p_0_m1))
   (att_marginal_transitions <- (hat_p_1_m_transitions %*% hat_R_1_m_transitions - hat_p_1_m_transitions) - (hat_p_0_m_transitions %*% hat_R_0_m_transitions - hat_p_0_m_transitions) %>% as.vector())
   
@@ -201,6 +241,7 @@ estimate_DD <- function(df, id, outcome, post , z ,ref_cat ) {
   
   out <- 
     list(
+      att_nonparametric = t(att_nonparametric) %>% data.frame() %>% set_rownames("nonparametric"),
       att_marginal = t(att_marginal) %>% data.frame() %>% set_rownames("marginal"),
       att_marginal_transitions = att_marginal_transitions %>% data.frame() %>% set_rownames("marginal_transitions"),
       att_transtiions = att_transitions %>% data.frame()

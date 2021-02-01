@@ -90,7 +90,6 @@ df_sipp <-
   ungroup()  %>% 
   left_join(df_w,"idnumber") %>% 
   filter(exclude_state != 1 | is.na(exclude_state)) %>% 
-  mutate(weight = 1) %>% 
   mutate(state = as.character(paste0(state))) %>% 
   group_by(idnumber) %>% 
   mutate(months_in_sample = n())
@@ -178,18 +177,45 @@ df_w %>%
 source(here("R/estimate-transitions-dd.r"))
 source(here("R/ri-permute.r"))
 
+dd_unweighted <- 
+    df %>% 
+    mutate(weight = 1) %>% 
+    estimate_DD(
+      outcome = insurance_type, 
+      post = post, 
+      z = expansion_state,
+      id = idnumber,
+      ref_cat = "UNIN",
+      weight = weight
+    ) 
+
+ dd_weighted <- 
+    df %>% 
+    #mutate(weight = 1) %>% 
+    estimate_DD(
+      outcome = insurance_type, 
+      post = post, 
+      z = expansion_state,
+      id = idnumber,
+      ref_cat = "UNIN",
+      weight = weight
+    ) 
+ 
+ 
 run_dd = FALSE
 
 if (run_dd) {
 
   dd_lm <- 
     df %>% 
+    mutate(weight = 1) %>% 
     estimate_DD(
       outcome = insurance_type, 
       post = post, 
       z = expansion_state,
       id = idnumber,
-      ref_cat = "UNIN"
+      ref_cat = "UNIN",
+      weight = weight
     ) 
   
   dd_lm_ri <- 
